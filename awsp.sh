@@ -25,14 +25,19 @@ _awsp_expiries() {
     done
 }
 
+# Header + one row per profile, aligned by `column` (which counts ●/○ as one column, unlike awk).
 _awsp_list() {
-  awk -F'\t' -v now="$(date +%s)" '
-    NR == FNR {ttl[$1] = $2; next}
-    {
-      left = ttl[$1] - now
-      st = left > 300 ? sprintf("● %dh%02dm", int(left / 3600), int(left % 3600 / 60)) : "○"
-      printf "%-50s %-9s %-40s %-13s %s\n", $1, st, $5, $4, $2
-    }' <(_awsp_expiries) "$AWSP_DB"
+  {
+    printf 'PROFILE\tSESSION\tACCOUNT\tID\tTILE\n'
+    # FILENAME, not NR == FNR: the expiries may be empty.
+    awk -F'\t' -v OFS='\t' -v now="$(date +%s)" '
+      FILENAME == ARGV[1] {ttl[$1] = $2; next}
+      {
+        left = ttl[$1] - now
+        st = left > 300 ? sprintf("● %dh%02dm", int(left / 3600), int(left % 3600 / 60)) : "○"
+        print $1, st, $5, $4, $2
+      }' <(_awsp_expiries) "$AWSP_DB"
+  } | column -t -s $'\t'
 }
 
 _awsp_valid() {
@@ -103,7 +108,7 @@ awsp() {
   if [[ -z $profile ]]; then
     [[ ${1:-} == arn:* ]] && { echo "awsp: unknown role $1 (need to run awsp-sync?)" >&2; return 1; }
     profile=$(_awsp_list | fzf --height 50% --reverse --no-sort --query "$*" --select-1 --exit-0 \
-      --header 'profile  session  account  id  tile' | awk '{print $1}')
+      --header-lines 1 | awk '{print $1}')
     [[ -n $profile ]] || return 1
   fi
 

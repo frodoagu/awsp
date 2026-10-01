@@ -67,10 +67,19 @@ check "replaces blocks with older markers" '[[ $(grep -c "awsp managed" "$t/conf
 
 # shellcheck source=../awsp.sh
 source "$repo/awsp.sh"
+# Every row has text starting exactly where each header column starts.
+list_aligned() {
+  awsp -l | sed 's/[●○]/o/g' | awk '
+    NR == 1 {n = split("SESSION ACCOUNT ID TILE", h, " "); for (i = 1; i <= n; i++) c[i] = index($0, h[i]); next}
+    {for (i = 1; i <= n; i++) if (substr($0, c[i] - 1, 2) !~ /^ [^ ]/) bad = 1}
+    END {exit bad}'
+}
+check "list with no sessions yet" '[[ $(awsp -l | wc -l) -eq 5 ]] && awsp -l | head -1 | grep -q "^PROFILE"'
 awsp acme-prod-web-admin >/dev/null 2>&1
 check "login and AWS_PROFILE" '[[ $AWS_PROFILE == acme-prod-web-admin ]] && [[ $(wc -l <"$LOGINS") -eq 1 ]]'
 awsp acme-prod-web-admin >/dev/null 2>&1
 check "active session: no new login" '[[ $(wc -l <"$LOGINS") -eq 1 ]]'
+check "list columns line up with the header" 'awsp -l | grep -q "^acme-prod-web-admin  *● " && list_aligned'
 
 export AWS_ACCESS_KEY_ID=zzz
 awsp arn:aws:iam::222222222222:role/ops/ReadOnly >/dev/null 2>&1
