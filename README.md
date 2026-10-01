@@ -1,6 +1,6 @@
 # awsp
 
-Selector de perfiles AWS para quienes entran por **Okta + saml2aws** y tienen muchos tiles, cuentas y roles.
+AWS profile picker for people who sign in through **Okta + saml2aws** and juggle many tiles, accounts and roles.
 
 ```
 $ awsp
@@ -9,71 +9,71 @@ $ awsp
   acme-prod-data-sysadmin    ○        acme-prod-data    444444444444  tile-a
 ```
 
-- **Un menú (fzf) con todas tus cuentas y roles**, de todos los tiles. ● = sesión vigente y tiempo que le queda.
-- **Login solo si hace falta**: si la sesión venció, corre `saml2aws login` para ese tile y rol; si no, solo cambia `AWS_PROFILE`.
-- **Perfiles con nombre, nunca credenciales en variables de entorno**: `awsp` limpia `AWS_ACCESS_KEY_ID` y compañía, y exporta `AWS_PROFILE`.
-- **Sesiones lo más largas posible**: si un rol rechaza la duración pedida, entra con 1h, consulta `MaxSessionDuration` con `iam get-role` y lo recuerda.
-- **Un solo MFA para varios roles**: con `saml_cache` de saml2aws la aserción SAML se reusa unos minutos.
-- **Contextos de kubectl atados al perfil**: `awsp-eks` crea contextos `<perfil>/<cluster>` que siempre usan las credenciales correctas, aunque cambies `AWS_PROFILE`.
+- **One menu (fzf) with all your accounts and roles**, across every tile. ● = active session and how long it has left.
+- **Logs in only when needed**: if the session expired it runs `saml2aws login` for that tile and role; otherwise it just switches `AWS_PROFILE`.
+- **Named profiles, never credentials in environment variables**: `awsp` clears `AWS_ACCESS_KEY_ID` and friends and exports `AWS_PROFILE`.
+- **Sessions as long as allowed**: if a role rejects the requested duration, awsp logs in for 1h, reads `MaxSessionDuration` with `iam get-role`, and remembers it.
+- **One MFA for several roles**: with saml2aws' `saml_cache`, the SAML assertion is reused for a few minutes.
+- **kubectl contexts bound to a profile**: `awsp-eks` creates `<profile>/<cluster>` contexts that always use the right credentials, even after you switch `AWS_PROFILE`.
 
-## Requisitos
+## Requirements
 
-bash, [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2, [fzf](https://github.com/junegunn/fzf), `script` (util-linux), GNU `date`. Está probado en Linux.
+bash, [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2, [fzf](https://github.com/junegunn/fzf), `script` (util-linux), GNU `date`. Tested on Linux.
 
-## Instalación
+## Install
 
 ```bash
 git clone https://github.com/frodoagu/awsp.git
-cd awsp && ./install.sh     # symlinks a ~/.config/awsp y ~/.local/bin, y una línea en ~/.bashrc
+cd awsp && ./install.sh     # symlinks into ~/.config/awsp and ~/.local/bin, plus one line in ~/.bashrc
 ```
 
-1. En `~/.saml2aws`, armá **una sección por tile de AWS en Okta**. Hay un ejemplo en [`examples/saml2aws.example`](examples/saml2aws.example).
-2. Generá el inventario:
+1. In `~/.saml2aws`, add **one section per AWS tile in Okta**. See [`examples/saml2aws.example`](examples/saml2aws.example).
+2. Build the inventory:
    ```bash
-   awsp-sync            # pide password + MFA una vez por tile
+   awsp-sync            # asks for password + MFA once per tile
    ```
-   Esto escribe `~/.config/awsp/profiles.tsv` y un bloque administrado al final de `~/.aws/config`, que no toca tus otros perfiles. Volvé a correrlo cuando te den acceso a cuentas nuevas.
+   This writes `~/.config/awsp/profiles.tsv` and a managed block at the end of `~/.aws/config`; your other profiles are left alone. Run it again whenever you get access to new accounts.
 
-## Uso
+## Usage
 
-| Comando | Qué hace |
+| Command | What it does |
 |---|---|
-| `awsp` | menú con todos los perfiles |
-| `awsp <texto>` | perfil exacto, o menú prefiltrado (si hay una sola coincidencia, la elige directo) |
-| `awsp arn:aws:iam::123456789012:role/admin` | por ARN; útil para aliases |
-| `awsp -l` | lista los perfiles con el estado de su sesión |
-| `awsp off` | limpia `AWS_PROFILE` y las credenciales en variables de entorno |
-| `awsp-eks [cluster…]` | agrega o actualiza contextos de kubectl para el perfil actual |
+| `awsp` | menu with every profile |
+| `awsp <text>` | exact profile, or a pre-filtered menu (a single match is picked directly) |
+| `awsp arn:aws:iam::123456789012:role/admin` | by role ARN; handy for aliases |
+| `awsp -l` | list profiles with their session status |
+| `awsp off` | clear `AWS_PROFILE` and any credentials in environment variables |
+| `awsp-eks [cluster…]` | add or update kubectl contexts for the current profile |
 
-Hay autocompletado con Tab para los nombres de perfil.
+Profile names tab-complete.
 
-Ejemplo de aliases:
+Example aliases:
 
 ```bash
 alias web-prod='awsp arn:aws:iam::111111111111:role/admin && awsp-eks web-cluster'
 ```
 
-## Cómo se nombran los perfiles
+## Profile naming
 
-Salen de `saml2aws list-roles`, como `<alias-de-cuenta>-<rol>` en minúsculas, por ejemplo `acme-prod-web-admin`. Si la cuenta no tiene alias se usa el ID. Cuando el mismo rol aparece en dos tiles, se queda el primero.
+Names come from `saml2aws list-roles` as `<account-alias>-<role>` in lowercase, e.g. `acme-prod-web-admin`. Accounts without an alias use their ID. When the same role shows up in two tiles, the first one wins.
 
-## Archivos
+## Files
 
-| Archivo | Contenido |
+| File | Contents |
 |---|---|
-| `~/.config/awsp/profiles.tsv` | inventario: perfil, tile, ARN, ID de cuenta, alias |
-| `~/.config/awsp/durations.tsv` | perfiles cuyo rol admite menos que la duración por defecto |
-| `~/.aws/config` | bloque `# >>> awsp managed` con la región de cada perfil |
-| `~/.aws/credentials` | lo escribe saml2aws, como siempre |
+| `~/.config/awsp/profiles.tsv` | inventory: profile, tile, role ARN, account ID, alias |
+| `~/.config/awsp/durations.tsv` | profiles whose role allows less than the default duration |
+| `~/.aws/config` | `# >>> awsp managed` block with each profile's region |
+| `~/.aws/credentials` | written by saml2aws, as usual |
 
-Todo se puede redirigir con `AWSP_DIR`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` y `SAML2AWS_CONFIGFILE`. La región por defecto de los perfiles generados se cambia con `AWSP_DEFAULT_REGION`.
+Everything can be redirected with `AWSP_DIR`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` and `SAML2AWS_CONFIGFILE`. The default region for generated profiles is set with `AWSP_DEFAULT_REGION`.
 
 ## Tests
 
 ```bash
-./test/run.sh    # usa stubs de saml2aws y aws; no toca Okta, AWS ni tu ~/.aws
+./test/run.sh    # uses saml2aws and aws stubs; never touches Okta, AWS or your ~/.aws
 ```
 
-## Licencia
+## License
 
 MIT

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala awsp con symlinks al repo (un `git pull` alcanza para actualizar).
+# Install awsp as symlinks into this repo (a `git pull` is enough to update).
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -11,12 +11,12 @@ ln -sfn "$repo/awsp.sh" "$cfg/awsp.sh"
 ln -sfn "$repo/bin/awsp-sync" "$bindir/awsp-sync"
 
 for dep in saml2aws aws fzf script; do
-  command -v "$dep" >/dev/null || echo "falta '$dep' en el PATH" >&2
+  command -v "$dep" >/dev/null || echo "missing '$dep' in PATH" >&2
 done
 
 line='[ -f ~/.config/awsp/awsp.sh ] && . ~/.config/awsp/awsp.sh'
 if ! grep -qF "$line" "$HOME/.bashrc" 2>/dev/null; then
-  printf '\n# awsp: selector de perfiles AWS sobre saml2aws\n%s\n' "$line" >>"$HOME/.bashrc"
-  echo "agregado a ~/.bashrc: $line"
+  printf '\n# awsp: AWS profile picker on top of saml2aws\n%s\n' "$line" >>"$HOME/.bashrc"
+  echo "added to ~/.bashrc: $line"
 fi
-echo "listo: abrí una terminal nueva y corré awsp-sync"
+echo "done: open a new terminal and run awsp-sync"

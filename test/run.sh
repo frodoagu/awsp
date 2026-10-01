@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests con stubs de saml2aws/aws: no tocan Okta, AWS ni tu ~/.aws.
+# Tests with saml2aws/aws stubs: they never touch Okta, AWS or your ~/.aws.
 set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -48,37 +48,40 @@ export PATH="$t/bin:$PATH" SAML2AWS_CONFIGFILE=$t/saml2aws AWS_CONFIG_FILE=$t/co
   AWS_SHARED_CREDENTIALS_FILE=$t/credentials AWSP_DIR=$t/awsp LOGINS=$t/logins KEYRING=$t/keyring
 
 fails=0
-check() { # descripción, comando
+check() { # description, command
   if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
 
 "$repo/bin/awsp-sync" >/dev/null 2>&1
 db=$t/awsp/profiles.tsv
-check "sync genera 4 perfiles (dedup entre tiles)" '[[ $(wc -l <"$db") -eq 4 ]]'
-check "nombre desde alias de cuenta" 'grep -q "^acme-dev-web-readonly	tile-a	arn:aws:iam::222222222222:role/ops/ReadOnly" "$db"'
-check "cuenta sin alias usa el id" 'grep -q "^333333333333-admin	tile-b" "$db"'
-check "sin \\r en el inventario" '! grep -q $'"'"'\r'"'"' "$db"'
-check "bloque administrado en ~/.aws/config" 'grep -q "^\[profile acme-prod-web-admin\]" "$t/config"'
+check "sync builds 4 profiles (dedup across tiles)" '[[ $(wc -l <"$db") -eq 4 ]]'
+check "name from account alias" 'grep -q "^acme-dev-web-readonly	tile-a	arn:aws:iam::222222222222:role/ops/ReadOnly" "$db"'
+check "account without alias uses its id" 'grep -q "^333333333333-admin	tile-b" "$db"'
+check "no \\r in the inventory" '! grep -q $'"'"'\r'"'"' "$db"'
+check "managed block in ~/.aws/config" 'grep -q "^\[profile acme-prod-web-admin\]" "$t/config"'
 "$repo/bin/awsp-sync" >/dev/null 2>&1
-check "sync idempotente" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
+check "sync is idempotent" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
+sed -i 's/^# >>> awsp managed.*/# >>> awsp managed (old marker) >>>/' "$t/config"
+"$repo/bin/awsp-sync" >/dev/null 2>&1
+check "replaces blocks with older markers" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
 
 # shellcheck source=../awsp.sh
 source "$repo/awsp.sh"
 awsp acme-prod-web-admin >/dev/null 2>&1
-check "login y AWS_PROFILE" '[[ $AWS_PROFILE == acme-prod-web-admin ]] && [[ $(wc -l <"$LOGINS") -eq 1 ]]'
+check "login and AWS_PROFILE" '[[ $AWS_PROFILE == acme-prod-web-admin ]] && [[ $(wc -l <"$LOGINS") -eq 1 ]]'
 awsp acme-prod-web-admin >/dev/null 2>&1
-check "sesión vigente: no vuelve a loguear" '[[ $(wc -l <"$LOGINS") -eq 1 ]]'
+check "active session: no new login" '[[ $(wc -l <"$LOGINS") -eq 1 ]]'
 
 export AWS_ACCESS_KEY_ID=zzz
 awsp arn:aws:iam::222222222222:role/ops/ReadOnly >/dev/null 2>&1
-check "por ARN y limpia variables de entorno" '[[ $AWS_PROFILE == acme-dev-web-readonly && -z ${AWS_ACCESS_KEY_ID:-} ]]'
-check "fallback de duración y máximo recordado" 'grep -q "^acme-dev-web-readonly	28800$" "$t/awsp/durations.tsv"'
+check "by ARN, clears env credentials" '[[ $AWS_PROFILE == acme-dev-web-readonly && -z ${AWS_ACCESS_KEY_ID:-} ]]'
+check "duration fallback, maximum remembered" 'grep -q "^acme-dev-web-readonly	28800$" "$t/awsp/durations.tsv"'
 
 awsp 333333333333-admin >/dev/null 2>&1
-check "sin password guardada: reintenta con prompt" 'grep -q "^tile-b 333333333333-admin dur=43200 skip=$" "$LOGINS"'
+check "no saved password: retries with prompt" 'grep -q "^tile-b 333333333333-admin dur=43200 skip=$" "$LOGINS"'
 
 awsp off
 check "awsp off" '[[ -z ${AWS_PROFILE:-} ]]'
 
 echo
-((fails == 0)) && echo "todo ok" || { echo "$fails fallas"; exit 1; }
+((fails == 0)) && echo "all ok" || { echo "$fails failed"; exit 1; }
