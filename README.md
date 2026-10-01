@@ -2,7 +2,7 @@
 
 AWS profile picker for people who sign in through **Okta + saml2aws** and juggle many tiles, accounts and roles.
 
-```
+```text
 $ awsp
 > prod
   acme-prod-web-admin        ● 7h42m  acme-prod-web     111111111111  tile-a
@@ -16,57 +16,154 @@ $ awsp
 - **One MFA for several roles**: with saml2aws' `saml_cache`, the SAML assertion is reused for a few minutes.
 - **kubectl contexts bound to a profile**: `awsp-eks` creates `<profile>/<cluster>` contexts that always use the right credentials, even after you switch `AWS_PROFILE`.
 
-## Requirements
+## Quickstart
 
-bash, [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2, [fzf](https://github.com/junegunn/fzf), `script` (util-linux), GNU `date`. Tested on Linux.
+You need bash 4+, [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2, [fzf](https://github.com/junegunn/fzf), `script` (util-linux) and GNU `date`. Tested on Linux.
 
-## Install
+### 1. Install
 
 ```bash
 git clone https://github.com/frodoagu/awsp.git
-cd awsp && ./install.sh     # symlinks into ~/.config/awsp and ~/.local/bin, plus one line in ~/.bashrc
+cd awsp && ./install.sh
 ```
 
-1. In `~/.saml2aws`, add **one section per AWS tile in Okta**. See [`examples/saml2aws.example`](examples/saml2aws.example).
-2. Build the inventory:
-   ```bash
-   awsp-sync            # asks for password + MFA once per tile
-   ```
-   This writes `~/.config/awsp/profiles.tsv` and a managed block at the end of `~/.aws/config`; your other profiles are left alone. Run it again whenever you get access to new accounts.
+The installer warns about any missing dependency and adds one line to `~/.bashrc`. Make sure `~/.local/bin` is in your `PATH`.
+
+### 2. Describe your Okta tiles
+
+Each AWS tile on your Okta dashboard becomes one section in `~/.saml2aws`. Start from the example and replace the URL, username and cache path:
+
+```bash
+cp examples/saml2aws.example ~/.saml2aws    # or merge it into the one you already have
+$EDITOR ~/.saml2aws
+```
+
+The tile URL is the link you see when you hover the tile on the Okta dashboard. The section name (`[team-a]`) is the tile name awsp will show you.
+
+### 3. Build the inventory
+
+Open a new terminal (so `awsp` is loaded), then:
+
+```bash
+awsp-sync
+```
+
+For each tile, saml2aws asks for your Okta password and MFA and lists every role you can assume. At the end you get a table of profiles. Run `awsp-sync` again whenever you get access to new accounts.
+
+### 4. Pick a profile
+
+```bash
+awsp            # menu with everything
+awsp prod web   # menu pre-filtered by "prod web"; a single match is picked directly
+```
+
+The first time you use a tile you'll be asked for the password again so saml2aws can save it in your keyring; after that, only MFA. Check it worked:
+
+```bash
+aws sts get-caller-identity
+```
+
+### 5. (Optional) kubectl
+
+```bash
+awsp-eks        # choose clusters of the current account in fzf
+kubectl config get-contexts
+```
 
 ## Usage
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `awsp` | menu with every profile |
-| `awsp <text>` | exact profile, or a pre-filtered menu (a single match is picked directly) |
-| `awsp arn:aws:iam::123456789012:role/admin` | by role ARN; handy for aliases |
+| `awsp <text>` | exact profile name, or a menu pre-filtered by `<text>` (a single match is picked directly) |
+| `awsp arn:aws:iam::123456789012:role/admin` | pick by role ARN; handy for aliases |
 | `awsp -l` | list profiles with their session status |
-| `awsp off` | clear `AWS_PROFILE` and any credentials in environment variables |
-| `awsp-eks [cluster…]` | add or update kubectl contexts for the current profile |
+| `awsp off` (or `awsp -`) | clear `AWS_PROFILE` and any credentials in environment variables |
+| `awsp -h` | short help |
+| `awsp-sync` | rebuild the inventory from every tile in `~/.saml2aws` |
+| `awsp-sync <tile>…` | re-sync only those tiles; rows from the other tiles are kept |
+| `awsp-eks [cluster…]` | add or update kubectl contexts for the current profile; with no arguments, choose from `eks list-clusters` |
 
-Profile names tab-complete.
+Profile names tab-complete after `awsp`.
 
-Example aliases:
+A session counts as active while it has more than 5 minutes left; below that, `awsp` logs in again.
+
+### Aliases
 
 ```bash
 alias web-prod='awsp arn:aws:iam::111111111111:role/admin && awsp-eks web-cluster'
 ```
 
-## Profile naming
+ARNs are stable, while profile names depend on account aliases, so aliases by ARN survive renames.
 
-Names come from `saml2aws list-roles` as `<account-alias>-<role>` in lowercase, e.g. `acme-prod-web-admin`. Accounts without an alias use their ID. When the same role shows up in two tiles, the first one wins.
+### kubectl contexts
 
-## Files
+`awsp-eks` runs `aws eks update-kubeconfig --profile <current profile> --alias <profile>/<cluster>`. The context pins the profile in its `aws eks get-token` call, so `kubectl --context acme-prod-web-admin/web-cluster` keeps working even after you `awsp` to another account. The region comes from `AWS_REGION`, then the profile's region, then `us-east-1`.
+
+## How it works
+
+### Profile naming
+
+`awsp-sync` reads `saml2aws list-roles` and names each role `<account-alias>-<role>`, lowercased with anything other than letters and digits turned into `-`. For example, `role/ops/ReadOnly` in account `acme-dev-web` becomes `acme-dev-web-readonly`. Accounts without an alias use their ID (`333333333333-admin`).
+
+If the same name shows up in two tiles:
+
+- same role ARN: the first tile wins;
+- different ARN: the tile name is appended (`acme-prod-web-admin-team-b`).
+
+### Logging in
+
+When the selected profile has no active session, `awsp` runs:
+
+```bash
+saml2aws login -a <tile> --role <arn> --profile <profile> --force --cache-saml --skip-prompt
+```
+
+- **No saved password** for the tile: it retries without `--skip-prompt` so you can type it.
+- **Role rejects the duration** (`DurationSeconds` error): it logs in for 1h, asks IAM for the role's `MaxSessionDuration`, and saves it in `durations.tsv` for next time.
+
+The requested duration otherwise comes from `aws_session_duration` in the tile's section of `~/.saml2aws`.
+
+### Files
 
 | File | Contents |
-|---|---|
+| --- | --- |
 | `~/.config/awsp/profiles.tsv` | inventory: profile, tile, role ARN, account ID, alias |
-| `~/.config/awsp/durations.tsv` | profiles whose role allows less than the default duration |
+| `~/.config/awsp/durations.tsv` | profiles whose role allows less than the requested duration |
 | `~/.aws/config` | `# >>> awsp managed` block with each profile's region |
+| `~/.aws/config.bak.awsp` | copy of `~/.aws/config` from before the last change by `awsp-sync` |
 | `~/.aws/credentials` | written by saml2aws, as usual |
 
-Everything can be redirected with `AWSP_DIR`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE` and `SAML2AWS_CONFIGFILE`. The default region for generated profiles is set with `AWSP_DEFAULT_REGION`.
+`awsp-sync` only rewrites its own block in `~/.aws/config`. If a `[profile …]` with the same name already exists outside the block, it is left alone and not duplicated.
+
+### Environment variables
+
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `AWSP_DIR` | `~/.config/awsp` | inventory and durations |
+| `AWSP_DEFAULT_REGION` | `us-east-1` | region written to generated profiles |
+| `SAML2AWS_CONFIGFILE` | `~/.saml2aws` | tile definitions |
+| `AWS_CONFIG_FILE` | `~/.aws/config` | managed block |
+| `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | session expiry |
+| `BINDIR` | `~/.local/bin` | where `install.sh` puts `awsp-sync` |
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `awsp: no inventory yet` | Run `awsp-sync`. |
+| `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp is bash-only. |
+| `awsp-sync: command not found` | Add `~/.local/bin` to your `PATH`. |
+| `list-roles failed for <tile>` | Check that tile's `url` and `username`. An empty Enter at the password prompt also fails. |
+| `unknown role arn:…` | The role isn't in the inventory; run `awsp-sync` again. |
+| MFA on every role switch | Set `saml_cache = true` and a `saml_cache_file` per tile, as in the example. |
+| A profile is missing | The tile it belongs to isn't in `~/.saml2aws`, or `awsp-sync` skipped it because of an error; scroll back through its output. |
+
+## Updating and uninstalling
+
+`install.sh` creates symlinks into the repo, so `git pull` is enough to update.
+
+To uninstall, remove `~/.config/awsp/awsp.sh`, `~/.local/bin/awsp-sync` and the awsp line in `~/.bashrc`. Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
 
 ## Tests
 
