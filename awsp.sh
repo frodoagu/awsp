@@ -85,7 +85,7 @@ _awsp_login() {
 
 awsp() {
   if [[ ! -s $AWSP_DB ]]; then
-    echo "awsp: no inventory yet; run awsp-sync first" >&2
+    echo "awsp: no inventory yet; run awsp-setup (or awsp-sync) first" >&2
     return 1
   fi
 

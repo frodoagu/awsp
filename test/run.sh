@@ -83,5 +83,21 @@ check "no saved password: retries with prompt" 'grep -q "^tile-b 333333333333-ad
 awsp off
 check "awsp off" '[[ -z ${AWS_PROFILE:-} ]]'
 
+cfg=$t/setup.saml2aws
+printf '[team-a]\nurl = x\nusername = me@example.com\nmfa = PUSH\naws_session_duration = 14400\n' >"$cfg"
+# Bad URL, valid URL, existing name, invalid name, valid name, 4 defaults, no more tiles, no sync.
+printf '%s\n' not-a-url 'https://example.okta.com/home/amazon_aws/0oaABC/272?fromHome=true' \
+  team-a 'team b' team-b '' '' '' '' n n |
+  SAML2AWS_CONFIGFILE=$cfg "$repo/bin/awsp-setup" >/dev/null 2>&1
+check "setup appends a tile" 'grep -qx "\[team-b\]" "$cfg" && [[ $(grep -c "^\[" "$cfg") -eq 2 ]]'
+check "setup strips the URL query" 'grep -q "^url  *= https://example.okta.com/home/amazon_aws/0oaABC/272$" "$cfg"'
+check "setup defaults from existing tiles" 'grep -q "^username  *= me@example.com$" "$cfg" && grep -q "^mfa  *= PUSH$" "$cfg" && grep -q "^aws_session_duration  *= 14400$" "$cfg"'
+check "setup enables saml_cache per tile" 'grep -q "^saml_cache_file  *= .*/saml_cache_team-b.xml$" "$cfg"'
+check "setup backs up the config" '[[ -f $cfg.bak.awsp ]] && ! grep -q team-b "$cfg.bak.awsp"'
+
+printf '%s\n' 'https://example.okta.com/home/amazon_aws/0oaDEF/272' team-c u@example.com '' 12 eu-west-1 n y |
+  SAML2AWS_CONFIGFILE=$cfg AWSP_DIR=$t/awsp2 "$repo/bin/awsp-setup" >/dev/null 2>&1
+check "setup runs awsp-sync for the new tile" '[[ $(cut -f2 "$t/awsp2/profiles.tsv" | sort -u) == team-c ]]'
+
 echo
 ((fails == 0)) && echo "all ok" || { echo "$fails failed"; exit 1; }

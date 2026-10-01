@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# awsp-setup: add Okta AWS tiles to ~/.saml2aws interactively, then sync them.
+#
+#   awsp-setup           # asks for each tile's URL, name, username, MFA…
+#
+# Defaults come from the tiles already in ~/.saml2aws. For anything else, edit
+# that file by hand (see examples/saml2aws.example).
+set -euo pipefail
+
+SAML_CFG=${SAML2AWS_CONFIGFILE:-$HOME/.saml2aws}
+URL_RE='^https://[^/]+/home/amazon_aws/[^/]+/[0-9]+$'
+
+# ask VAR "question" [default]
+ask() {
+  local _a
+  read -r -p "$2${3:+ [$3]}: " _a || { echo; echo "awsp-setup: aborted" >&2; exit 1; }
+  printf -v "$1" '%s' "${_a:-${3:-}}"
+}
+
+# confirm "question" y|n
+confirm() {
+  local a
+  read -r -p "$1 [$([[ $2 == y ]] && echo Y/n || echo y/N)] " a || a=
+  [[ ${a:-$2} == [Yy]* ]]
+}
+
+# Last value of a key in the existing config, used as the default for new tiles.
+last() { awk -F' *= *' -v k="$1" '$1 == k {v = $2} END {print v}' "$SAML_CFG" 2>/dev/null || true; }
+
+tiles() { sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "$SAML_CFG" 2>/dev/null || true; }
+
+def_user=$(last username)
+def_mfa=$(last mfa)
+def_region=$(last region)
+def_secs=$(last aws_session_duration | tr -cd 0-9)
+def_hours=$((${def_secs:-0} / 3600))
+((def_hours >= 1 && def_hours <= 12)) || def_hours=8
+
+echo "Adding Okta AWS tiles to $SAML_CFG"
+echo "Tile URL: on the Okta dashboard, right-click the AWS tile and copy the link."
+added=()
+while :; do
+  echo
+  while :; do
+    ask url "Tile URL"
+    url=${url%%\?*}
+    [[ $url =~ $URL_RE ]] && break
+    if [[ $url == https://* ]]; then
+      confirm "  doesn't look like https://<org>.okta.com/home/amazon_aws/<id>/<n>; use it anyway?" n && break
+    else
+      echo "  expected https://<org>.okta.com/home/amazon_aws/<id>/<n>"
+    fi
+  done
+
+  while :; do
+    ask name "Tile name, shown in the awsp menu (e.g. team-a)"
+    if [[ ! $name =~ ^[A-Za-z0-9._-]+$ || $name == default ]]; then
+      echo "  use letters, digits, '.', '_' or '-' (and not 'default')"
+    elif tiles | grep -qxF "$name"; then
+      echo "  [$name] already exists in $SAML_CFG"
+    else
+      break
+    fi
+  done
+
+  while :; do
+    ask user "Okta username" "$def_user"
+    [[ -n $user ]] && break
+  done
+  ask mfa "MFA (Auto, PUSH, TOTP, SMS…)" "${def_mfa:-Auto}"
+  while :; do
+    ask hours "Session length in hours, 1-12 (awsp lowers it per role when needed)" "$def_hours"
+    [[ $hours =~ ^([1-9]|1[0-2])$ ]] && break
+  done
+  ask region "Region" "${def_region:-${AWSP_DEFAULT_REGION:-us-east-1}}"
+
+  if ((${#added[@]} == 0)) && [[ -s $SAML_CFG ]]; then
+    cp "$SAML_CFG" "$SAML_CFG.bak.awsp"
+  fi
+  {
+    [[ -s $SAML_CFG ]] && echo
+    printf '[%s]\n' "$name"
+    # saml_cache: reuse the SAML assertion for a few minutes, so switching roles skips MFA.
+    printf '%-20s = %s\n' name "$name" url "$url" username "$user" provider Okta mfa "$mfa" \
+      aws_urn urn:amazon:webservices aws_session_duration $((hours * 3600)) region "$region" \
+      saml_cache true saml_cache_file "$HOME/.aws/saml_cache_$name.xml"
+  } >>"$SAML_CFG"
+  chmod 600 "$SAML_CFG"
+  added+=("$name")
+  echo "  added [$name]"
+  def_user=$user def_mfa=$mfa def_hours=$hours def_region=$region
+
+  confirm "Add another tile?" n || break
+done
+
+echo
+if confirm "Run awsp-sync ${added[*]} now (asks for password + MFA per tile)?" y; then
+  exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/awsp-sync" "${added[@]}"
+fi
+echo "Run 'awsp-sync ${added[*]}' when you're ready."

@@ -9,6 +9,7 @@ $ awsp
   acme-prod-data-sysadmin    ○        acme-prod-data    444444444444  tile-a
 ```
 
+- **Guided setup**: `awsp-setup` asks for your Okta tiles and writes `~/.saml2aws` for you.
 - **One menu (fzf) with all your accounts and roles**, across every tile. ● = active session and how long it has left.
 - **Logs in only when needed**: if the session expired it runs `saml2aws login` for that tile and role; otherwise it just switches `AWS_PROFILE`.
 - **Named profiles, never credentials in environment variables**: `awsp` clears `AWS_ACCESS_KEY_ID` and friends and exports `AWS_PROFILE`.
@@ -29,28 +30,40 @@ cd awsp && ./install.sh
 
 The installer warns about any missing dependency and adds one line to `~/.bashrc`. Make sure `~/.local/bin` is in your `PATH`.
 
-### 2. Describe your Okta tiles
-
-Each AWS tile on your Okta dashboard becomes one section in `~/.saml2aws`. Start from the example and replace the URL, username and cache path:
-
-```bash
-cp examples/saml2aws.example ~/.saml2aws    # or merge it into the one you already have
-$EDITOR ~/.saml2aws
-```
-
-The tile URL is the link you see when you hover the tile on the Okta dashboard. The section name (`[team-a]`) is the tile name awsp will show you.
-
-### 3. Build the inventory
+### 2. Add your Okta tiles
 
 Open a new terminal (so `awsp` is loaded), then:
 
 ```bash
-awsp-sync
+awsp-setup
 ```
 
-For each tile, saml2aws asks for your Okta password and MFA and lists every role you can assume. At the end you get a table of profiles. Run `awsp-sync` again whenever you get access to new accounts.
+It asks, for each AWS tile on your Okta dashboard:
 
-### 4. Pick a profile
+```text
+Tile URL: https://acme.okta.com/home/amazon_aws/0oaXXXXXXXXXXXXXXXXX/272
+Tile name, shown in the awsp menu (e.g. team-a): team-a
+Okta username: me@acme.com
+MFA (Auto, PUSH, TOTP, SMS…) [Auto]: TOTP
+Session length in hours, 1-12 (awsp lowers it per role when needed) [8]:
+Region [us-east-1]:
+  added [team-a]
+Add another tile? [y/N]
+Run awsp-sync team-a now (asks for password + MFA per tile)? [Y/n]
+```
+
+To get the tile URL, right-click the AWS tile on the Okta dashboard and copy the link. Each tile becomes a section in `~/.saml2aws`, with the SAML cache turned on so switching roles doesn't ask for MFA every time. Answers default to those of the previous tile, so adding more is mostly pressing Enter.
+
+When it finishes, `awsp-sync` asks for your Okta password and MFA once per tile, lists every role you can assume and prints the resulting profiles. Run `awsp-sync` again whenever you get access to new accounts.
+
+<details>
+<summary>Prefer to edit <code>~/.saml2aws</code> by hand?</summary>
+
+Start from [`examples/saml2aws.example`](examples/saml2aws.example): one section per tile, every section except `[default]` is a tile. Then run `awsp-sync`.
+
+</details>
+
+### 3. Pick a profile
 
 ```bash
 awsp            # menu with everything
@@ -63,7 +76,7 @@ The first time you use a tile you'll be asked for the password again so saml2aws
 aws sts get-caller-identity
 ```
 
-### 5. (Optional) kubectl
+### 4. (Optional) kubectl
 
 ```bash
 awsp-eks        # choose clusters of the current account in fzf
@@ -80,6 +93,7 @@ kubectl config get-contexts
 | `awsp -l` | list profiles with their session status |
 | `awsp off` (or `awsp -`) | clear `AWS_PROFILE` and any credentials in environment variables |
 | `awsp -h` | short help |
+| `awsp-setup` | add Okta tiles to `~/.saml2aws` interactively, then sync them |
 | `awsp-sync` | rebuild the inventory from every tile in `~/.saml2aws` |
 | `awsp-sync <tile>…` | re-sync only those tiles; rows from the other tiles are kept |
 | `awsp-eks [cluster…]` | add or update kubectl contexts for the current profile; with no arguments, choose from `eks list-clusters` |
@@ -130,6 +144,7 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 | --- | --- |
 | `~/.config/awsp/profiles.tsv` | inventory: profile, tile, role ARN, account ID, alias |
 | `~/.config/awsp/durations.tsv` | profiles whose role allows less than the requested duration |
+| `~/.saml2aws` | tile definitions; `awsp-setup` appends to it and keeps a copy in `~/.saml2aws.bak.awsp` |
 | `~/.aws/config` | `# >>> awsp managed` block with each profile's region |
 | `~/.aws/config.bak.awsp` | copy of `~/.aws/config` from before the last change by `awsp-sync` |
 | `~/.aws/credentials` | written by saml2aws, as usual |
@@ -145,25 +160,25 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 | `SAML2AWS_CONFIGFILE` | `~/.saml2aws` | tile definitions |
 | `AWS_CONFIG_FILE` | `~/.aws/config` | managed block |
 | `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | session expiry |
-| `BINDIR` | `~/.local/bin` | where `install.sh` puts `awsp-sync` |
+| `BINDIR` | `~/.local/bin` | where `install.sh` puts `awsp-setup` and `awsp-sync` |
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| `awsp: no inventory yet` | Run `awsp-sync`. |
+| `awsp: no inventory yet` | Run `awsp-setup`, or `awsp-sync` if `~/.saml2aws` already has your tiles. |
 | `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp is bash-only. |
-| `awsp-sync: command not found` | Add `~/.local/bin` to your `PATH`. |
-| `list-roles failed for <tile>` | Check that tile's `url` and `username`. An empty Enter at the password prompt also fails. |
+| `awsp-setup` / `awsp-sync`: command not found | Add `~/.local/bin` to your `PATH`. |
+| `list-roles failed for <tile>` | Check that tile's `url` and `username` in `~/.saml2aws`. An empty Enter at the password prompt also fails. |
 | `unknown role arn:…` | The role isn't in the inventory; run `awsp-sync` again. |
 | MFA on every role switch | Set `saml_cache = true` and a `saml_cache_file` per tile, as in the example. |
-| A profile is missing | The tile it belongs to isn't in `~/.saml2aws`, or `awsp-sync` skipped it because of an error; scroll back through its output. |
+| A profile is missing | The tile it belongs to isn't in `~/.saml2aws` (add it with `awsp-setup`), or `awsp-sync` skipped it because of an error; scroll back through its output. |
 
 ## Updating and uninstalling
 
 `install.sh` creates symlinks into the repo, so `git pull` is enough to update.
 
-To uninstall, remove `~/.config/awsp/awsp.sh`, `~/.local/bin/awsp-sync` and the awsp line in `~/.bashrc`. Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
+To uninstall, remove `~/.config/awsp/awsp.sh`, `~/.local/bin/awsp-setup`, `~/.local/bin/awsp-sync` and the awsp line in `~/.bashrc`. Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
 
 ## Tests
 

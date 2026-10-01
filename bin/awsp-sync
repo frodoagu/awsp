@@ -20,7 +20,7 @@ tiles=("$@")
 if ((${#tiles[@]} == 0)); then
   mapfile -t tiles < <(sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "$SAML_CFG" | grep -vx default)
 fi
-((${#tiles[@]})) || { echo "awsp-sync: no tiles found in $SAML_CFG" >&2; exit 1; }
+((${#tiles[@]})) || { echo "awsp-sync: no tiles found in $SAML_CFG; add them with awsp-setup" >&2; exit 1; }
 
 mkdir -p "$AWSP_DIR"
 tmp=$(mktemp -d)

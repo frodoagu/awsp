@@ -9,6 +9,7 @@ bindir=${BINDIR:-$HOME/.local/bin}
 mkdir -p "$cfg" "$bindir"
 ln -sfn "$repo/awsp.sh" "$cfg/awsp.sh"
 ln -sfn "$repo/bin/awsp-sync" "$bindir/awsp-sync"
+ln -sfn "$repo/bin/awsp-setup" "$bindir/awsp-setup"
 
 for dep in saml2aws aws fzf script; do
   command -v "$dep" >/dev/null || echo "missing '$dep' in PATH" >&2
@@ -19,4 +20,4 @@ if ! grep -qF "$line" "$HOME/.bashrc" 2>/dev/null; then
   printf '\n# awsp: AWS profile picker on top of saml2aws\n%s\n' "$line" >>"$HOME/.bashrc"
   echo "added to ~/.bashrc: $line"
 fi
-echo "done: open a new terminal and run awsp-sync"
+echo "done: open a new terminal and run awsp-setup (or awsp-sync if ~/.saml2aws already has your tiles)"
