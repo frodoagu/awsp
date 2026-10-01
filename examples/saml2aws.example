@@ -1,0 +1,30 @@
+# ~/.saml2aws: una sección por tile de AWS en Okta.
+# awsp-sync recorre todas las secciones salvo [default].
+# La URL de cada tile es la que aparece al pasar el mouse sobre el tile en el dashboard de Okta.
+
+[equipo-a]
+name                 = equipo-a
+url                  = https://example.okta.com/home/amazon_aws/0oaXXXXXXXXXXXXXXXXX/272
+username             = usuario@example.com
+provider             = Okta
+mfa                  = TOTP
+aws_urn              = urn:amazon:webservices
+# Duración pedida por defecto; si un rol admite menos, awsp averigua su máximo y lo recuerda.
+aws_session_duration = 28800
+region               = us-east-1
+# Reusar la aserción SAML unos minutos: cambiar de rol sin repetir el MFA.
+# Usá un archivo de caché distinto por tile.
+saml_cache           = true
+saml_cache_file      = /home/usuario/.aws/saml_cache_equipo-a.xml
+
+[equipo-b]
+name                 = equipo-b
+url                  = https://example.okta.com/home/amazon_aws/0oaYYYYYYYYYYYYYYYYY/272
+username             = usuario@example.com
+provider             = Okta
+mfa                  = TOTP
+aws_urn              = urn:amazon:webservices
+aws_session_duration = 28800
+region               = us-east-1
+saml_cache           = true
+saml_cache_file      = /home/usuario/.aws/saml_cache_equipo-b.xml

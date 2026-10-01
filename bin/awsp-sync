@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# awsp-sync: regenera el inventario de perfiles de awsp a partir de los tiles
+# de Okta definidos en ~/.saml2aws (todas las secciones menos [default]).
+#
+#   awsp-sync            # todos los tiles
+#   awsp-sync mi-tile    # solo algunos (los demás se conservan del inventario anterior)
+#
+# Escribe ~/.config/awsp/profiles.tsv y un bloque administrado en ~/.aws/config.
+set -euo pipefail
+
+SAML_CFG=${SAML2AWS_CONFIGFILE:-$HOME/.saml2aws}
+AWS_CFG=${AWS_CONFIG_FILE:-$HOME/.aws/config}
+AWSP_DIR=${AWSP_DIR:-$HOME/.config/awsp}
+DB=$AWSP_DIR/profiles.tsv
+REGION=${AWSP_DEFAULT_REGION:-us-east-1}
+BEGIN_MARK='# >>> awsp managed (generado por awsp-sync, no editar) >>>'
+END_MARK='# <<< awsp managed <<<'
+
+tiles=("$@")
+if ((${#tiles[@]} == 0)); then
+  mapfile -t tiles < <(sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "$SAML_CFG" | grep -vx default)
+fi
+((${#tiles[@]})) || { echo "awsp-sync: no hay tiles en $SAML_CFG" >&2; exit 1; }
+
+mkdir -p "$AWSP_DIR"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# Si se sincronizan solo algunos tiles, conservar las filas de los otros.
+if (($#)) && [[ -s $DB ]]; then
+  awk -F'\t' -v keep=" $* " 'index(keep, " " $2 " ") == 0' "$DB" >"$tmp/rows"
+else
+  : >"$tmp/rows"
+fi
+
+for tile in "${tiles[@]}"; do
+  echo "==> [$tile] listando roles (si es la primera vez con este tile, escribí la password: Enter vacío falla)"
+  # `script` le da una TTY a saml2aws (los prompts andan) y guarda la salida.
+  if ! script -qec "saml2aws list-roles -a $(printf '%q' "$tile")" "$tmp/$tile.log"; then
+    echo "awsp-sync: falló list-roles para $tile, se omite" >&2
+    continue
+  fi
+  tr -d '\r' <"$tmp/$tile.log" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' |
+    awk -v tile="$tile" '
+      /^Account: / {
+        label = substr($0, 10)
+        if (match(label, / \([0-9]+\)[[:space:]]*$/)) label = substr(label, 1, RSTART - 1)
+        next
+      }
+      /^arn:aws:iam::[0-9]+:role\// {
+        arn = $1
+        split(arn, p, ":"); acct = p[5]
+        role = arn; sub(/.*\//, "", role)
+        if (label == "" || label ~ /^[0-9]+$/) label = acct
+        prof = tolower(label "-" role)
+        gsub(/[^a-z0-9]+/, "-", prof); gsub(/^-|-$/, "", prof)
+        print prof "\t" tile "\t" arn "\t" acct "\t" label
+      }' >>"$tmp/rows"
+done
+
+# Mismo nombre y mismo ARN desde dos tiles: queda el primero.
+# Mismo nombre con ARN distinto: se le agrega el tile como sufijo.
+awk -F'\t' -v OFS='\t' '
+  ($1 in arn) { if (arn[$1] == $3) next; $1 = $1 "-" $2 }
+  { arn[$1] = $3; print }' "$tmp/rows" | sort -t$'\t' -k1,1 >"$tmp/db"
+
+if [[ ! -s $tmp/db ]]; then
+  echo "awsp-sync: no se encontró ningún rol; no toco nada" >&2
+  exit 1
+fi
+mv "$tmp/db" "$DB"
+
+# Bloque administrado en ~/.aws/config (solo region; las credenciales las escribe saml2aws).
+touch "$AWS_CFG"
+awk -v b="$BEGIN_MARK" -v e="$END_MARK" '$0 == b {skip = 1; next} $0 == e {skip = 0; next} !skip' \
+  "$AWS_CFG" >"$tmp/config.base"
+{
+  cat "$tmp/config.base"
+  echo "$BEGIN_MARK"
+  while IFS=$'\t' read -r prof _; do
+    if grep -qxF "[profile $prof]" "$tmp/config.base"; then
+      echo "awsp-sync: [profile $prof] ya existe fuera del bloque, no lo duplico" >&2
+      continue
+    fi
+    printf '[profile %s]\nregion = %s\n' "$prof" "$REGION"
+  done <"$DB"
+  echo "$END_MARK"
+} >"$tmp/config.new"
+if ! cmp -s "$tmp/config.new" "$AWS_CFG"; then
+  cp "$AWS_CFG" "$AWS_CFG.bak.awsp"
+  cat "$tmp/config.new" >"$AWS_CFG"
+fi
+
+echo
+echo "$(wc -l <"$DB") perfiles en $DB:"
+column -t -s$'\t' "$DB"
