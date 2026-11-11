@@ -96,6 +96,6 @@ done
 
 echo
 if confirm "Run awsp sync ${added[*]} now (asks for password + MFA per tile)?" y; then
-  exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/awsp-sync" "${added[@]}"
+  exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/awsp-sync" "${added[@]}"
 fi
 echo "Run 'awsp sync ${added[*]}' when you're ready."

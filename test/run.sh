@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tests with saml2aws/aws stubs: they never touch Okta, AWS or your ~/.aws.
+# Portable on purpose (Linux and macOS, bash 3.2+); the zsh tests run if zsh is installed.
 set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -35,8 +36,9 @@ if [[ $role == *ReadOnly && $dur -gt 28800 ]]; then
   echo "ValidationError: The requested DurationSeconds exceeds the MaxSessionDuration" >&2; exit 1
 fi
 echo "$tile $prof dur=$dur skip=$skip" >>"$LOGINS"
-printf '[%s]\nx_security_token_expires = %s\n' "$prof" "$(date -d "+$dur sec" --iso-8601=seconds)" \
-  >>"$AWS_SHARED_CREDENTIALS_FILE"
+exp=$(($(date +%s) + dur))
+ts=$(date -u -d "@$exp" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$exp" +%Y-%m-%dT%H:%M:%SZ)
+printf '[%s]\nx_security_token_expires = %s\n' "$prof" "$ts" >>"$AWS_SHARED_CREDENTIALS_FILE"
 EOF
 cat >"$t/bin/aws" <<'EOF'
 #!/usr/bin/env bash
@@ -47,6 +49,8 @@ case "$1 $2" in
 esac
 EOF
 chmod +x "$t/bin/"*
+# `#!/usr/bin/env bash` in the stubs and libexec/ gets the bash running the tests, e.g. /bin/bash 3.2 on macOS.
+ln -s "$BASH" "$t/bin/bash"
 
 printf '[default]\nurl = x\n\n[tile-a]\nurl = a\n\n[tile-b]\nurl = b\n' >"$t/saml2aws"
 printf '[default]\nregion = us-east-1\n' >"$t/config"
@@ -60,6 +64,8 @@ fails=0
 check() { # description, command
   if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
+# sed -i differs between GNU and BSD sed.
+subst() { sed "$1" "$2" >"$2.new" && mv "$2.new" "$2"; }
 
 # shellcheck source=../awsp.sh
 source "$repo/awsp.sh"
@@ -75,10 +81,10 @@ check "no \\r in the inventory" '! grep -q $'"'"'\r'"'"' "$db"'
 check "managed block in ~/.aws/config" 'grep -q "^\[profile acme-prod-web-admin\]" "$t/config"'
 awsp sync >/dev/null 2>&1
 check "sync is idempotent" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
-sed -i 's/^# >>> awsp managed.*/# >>> awsp managed (old marker) >>>/' "$t/config"
+subst 's/^# >>> awsp managed.*/# >>> awsp managed (old marker) >>>/' "$t/config"
 awsp sync >/dev/null 2>&1
 check "replaces blocks with older markers" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
-sed -i '/	tile-a	/s/	arn:/	arn:x/' "$db"
+subst '/	tile-a	/s/	arn:/	arn:x/' "$db"
 awsp sync tile-b >/dev/null 2>&1
 check "sync <tile> keeps the other tiles' rows" '[[ $(grep -c "	arn:xaws:" "$db") -eq 3 ]]'
 awsp sync >/dev/null 2>&1
@@ -91,6 +97,9 @@ list_aligned() {
     END {exit bad}'
 }
 check "list with no sessions yet" '[[ $(awsp list | wc -l) -eq 5 && $(awsp -l | wc -l) -eq 5 ]] && awsp list | head -1 | grep -q "^PROFILE"'
+printf '[a]\nx_security_token_expires = 2026-11-11T12:35:35-03:00\n[b]\nx_security_token_expires = 2026-11-11T15:35:35Z\n[c]\nx_security_token_expires = 2024-02-29T23:59:59.5+05:30\n' >"$t/fixed"
+check "expiry: RFC 3339 offsets, Z and fractions, without GNU date" \
+  '[[ $(AWS_SHARED_CREDENTIALS_FILE=$t/fixed _awsp_expiries | tr "\t\n" ":,") == a:1794411335,b:1794411335,c:1709231399, ]]'
 check "awsp help lists the subcommands" '[[ $(awsp help) == *"awsp setup"*"awsp sync"*"awsp eks"* ]]'
 
 COMP_WORDS=(awsp s) COMP_CWORD=1; _awsp_complete
@@ -135,6 +144,52 @@ check "setup backs up the config" '[[ -f $cfg.bak.awsp ]] && ! grep -q team-b "$
 printf '%s\n' 'https://example.okta.com/home/amazon_aws/0oaDEF/272' team-c u@example.com '' 12 eu-west-1 n y |
   SAML2AWS_CONFIGFILE=$cfg AWSP_DIR=$t/awsp2 awsp setup >/dev/null 2>&1
 check "setup runs awsp sync for the new tile" '[[ $(cut -f2 "$t/awsp2/profiles.tsv" | sort -u) == team-c ]]'
+
+if command -v zsh >/dev/null 2>&1; then
+  : >"$AWS_SHARED_CREDENTIALS_FILE"
+  : >"$LOGINS"
+  # A file, not stdin: script(1) inside the login would eat the rest of the commands.
+  cat >"$t/test.zsh" <<EOF
+source "$repo/awsp.sh"
+print "list=\$(awsp list | wc -l | tr -d ' ')"
+awsp acme-dev-web-readonly 2>/dev/null
+print "profile=\$AWS_PROFILE"
+awsp off
+print "off=\${AWS_PROFILE:-unset}"
+print "sync=\$(awsp sync tile-b 2>&1 | grep -c '==> \[')"
+print "cands=\$(_awsp_candidates 1 '' | tr '\n' ' ')"
+print "tiles=\$(_awsp_candidates 2 sync | tr '\n' ' ')"
+autoload -Uz compinit && compinit -u -D
+source "$repo/awsp.sh"
+print "compdef=\${_comps[awsp]}"
+EOF
+  zsh -f "$t/test.zsh" >"$t/zsh.out" 2>"$t/zsh.err" </dev/null
+  check "zsh: awsp list" 'grep -qx "list=5" "$t/zsh.out"'
+  check "zsh: login with a remembered duration, exports AWS_PROFILE" \
+    'grep -qx "profile=acme-dev-web-readonly" "$t/zsh.out" && grep -qx "tile-a acme-dev-web-readonly dur=28800 skip=1" "$LOGINS"'
+  check "zsh: awsp off" 'grep -qx "off=unset" "$t/zsh.out"'
+  check "zsh: awsp sync <tile> passes the tile on" 'grep -qx "sync=1" "$t/zsh.out"'
+  check "zsh: completion candidates" \
+    'grep -q "^cands=setup sync eks list off help .*acme-prod-web-admin" "$t/zsh.out" && grep -qx "tiles=tile-a tile-b " "$t/zsh.out"'
+  check "zsh: completion registered with compdef" 'grep -qx "compdef=_awsp_zsh_complete" "$t/zsh.out"'
+  check "zsh: nothing on stderr" '[[ ! -s $t/zsh.err ]] || { cat "$t/zsh.err"; false; }'
+else
+  echo "skip zsh tests (zsh not installed)"
+fi
+
+# install.sh in a scratch HOME, coming from a version that linked awsp-sync into ~/.local/bin.
+h=$t/home
+mkdir -p "$h/.local/bin"
+ln -s /nonexistent/awsp-sync "$h/.local/bin/awsp-sync"
+install_as() { HOME=$h SHELL=$1 AWSP_DIR= BINDIR= AWSP_RC= "$repo/install.sh" >/dev/null 2>&1; }
+install_as /bin/zsh
+install_as /bin/zsh
+check "install: links awsp.sh and removes old links" '[[ -L $h/.config/awsp/awsp.sh && ! -L $h/.local/bin/awsp-sync ]]'
+check "install: zsh gets one line in ~/.zshrc" '[[ $(grep -c awsp.sh "$h/.zshrc") -eq 1 ]]'
+bash_rc=.bashrc
+[[ $(uname -s) == Darwin ]] && bash_rc=.bash_profile
+install_as /bin/bash
+check "install: bash gets ~/$bash_rc" 'grep -q awsp.sh "$h/$bash_rc"'
 
 echo
 ((fails == 0)) && echo "all ok" || { echo "$fails failed"; exit 1; }
