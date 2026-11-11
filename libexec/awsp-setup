@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# awsp-setup: add Okta AWS tiles to ~/.saml2aws interactively, then sync them.
+# awsp setup: add Okta AWS tiles to ~/.saml2aws interactively, then sync them.
+# Called by `awsp setup`; not meant to be on PATH.
 #
-#   awsp-setup           # asks for each tile's URL, name, username, MFA…
+#   awsp setup           # asks for each tile's URL, name, username, MFA…
 #
 # Defaults come from the tiles already in ~/.saml2aws. For anything else, edit
 # that file by hand (see examples/saml2aws.example).
@@ -13,7 +14,7 @@ URL_RE='^https://[^/]+/home/amazon_aws/[^/]+/[0-9]+$'
 # ask VAR "question" [default]
 ask() {
   local _a
-  read -r -p "$2${3:+ [$3]}: " _a || { echo; echo "awsp-setup: aborted" >&2; exit 1; }
+  read -r -p "$2${3:+ [$3]}: " _a || { echo; echo "awsp setup: aborted" >&2; exit 1; }
   printf -v "$1" '%s' "${_a:-${3:-}}"
 }
 
@@ -94,7 +95,7 @@ while :; do
 done
 
 echo
-if confirm "Run awsp-sync ${added[*]} now (asks for password + MFA per tile)?" y; then
+if confirm "Run awsp sync ${added[*]} now (asks for password + MFA per tile)?" y; then
   exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/awsp-sync" "${added[@]}"
 fi
-echo "Run 'awsp-sync ${added[*]}' when you're ready."
+echo "Run 'awsp sync ${added[*]}' when you're ready."

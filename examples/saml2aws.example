@@ -1,5 +1,5 @@
 # ~/.saml2aws: one section per AWS tile in Okta.
-# awsp-sync walks every section except [default].
+# `awsp sync` walks every section except [default].
 # Each tile's URL is the link shown when hovering the tile on the Okta dashboard.
 
 [team-a]

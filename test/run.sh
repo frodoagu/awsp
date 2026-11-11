@@ -38,43 +38,67 @@ echo "$tile $prof dur=$dur skip=$skip" >>"$LOGINS"
 printf '[%s]\nx_security_token_expires = %s\n' "$prof" "$(date -d "+$dur sec" --iso-8601=seconds)" \
   >>"$AWS_SHARED_CREDENTIALS_FILE"
 EOF
-printf '#!/bin/sh\necho 28800\n' >"$t/bin/aws"
+cat >"$t/bin/aws" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "iam get-role") echo 28800 ;;
+  "configure get") echo us-west-2 ;;
+  "eks update-kubeconfig") echo "$*" >>"$EKS_LOG" ;;
+esac
+EOF
 chmod +x "$t/bin/"*
 
 printf '[default]\nurl = x\n\n[tile-a]\nurl = a\n\n[tile-b]\nurl = b\n' >"$t/saml2aws"
 printf '[default]\nregion = us-east-1\n' >"$t/config"
 : >"$t/credentials"
+unset AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export PATH="$t/bin:$PATH" SAML2AWS_CONFIGFILE=$t/saml2aws AWS_CONFIG_FILE=$t/config \
-  AWS_SHARED_CREDENTIALS_FILE=$t/credentials AWSP_DIR=$t/awsp LOGINS=$t/logins KEYRING=$t/keyring
+  AWS_SHARED_CREDENTIALS_FILE=$t/credentials AWSP_DIR=$t/awsp LOGINS=$t/logins KEYRING=$t/keyring \
+  EKS_LOG=$t/eks
 
 fails=0
 check() { # description, command
   if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
 }
 
-"$repo/bin/awsp-sync" >/dev/null 2>&1
+# shellcheck source=../awsp.sh
+source "$repo/awsp.sh"
+
+check "no inventory: asks for awsp sync" '[[ $(awsp x 2>&1) == *"awsp sync"* ]]'
+
+awsp sync >/dev/null 2>&1
 db=$t/awsp/profiles.tsv
 check "sync builds 4 profiles (dedup across tiles)" '[[ $(wc -l <"$db") -eq 4 ]]'
 check "name from account alias" 'grep -q "^acme-dev-web-readonly	tile-a	arn:aws:iam::222222222222:role/ops/ReadOnly" "$db"'
 check "account without alias uses its id" 'grep -q "^333333333333-admin	tile-b" "$db"'
 check "no \\r in the inventory" '! grep -q $'"'"'\r'"'"' "$db"'
 check "managed block in ~/.aws/config" 'grep -q "^\[profile acme-prod-web-admin\]" "$t/config"'
-"$repo/bin/awsp-sync" >/dev/null 2>&1
+awsp sync >/dev/null 2>&1
 check "sync is idempotent" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
 sed -i 's/^# >>> awsp managed.*/# >>> awsp managed (old marker) >>>/' "$t/config"
-"$repo/bin/awsp-sync" >/dev/null 2>&1
+awsp sync >/dev/null 2>&1
 check "replaces blocks with older markers" '[[ $(grep -c "awsp managed" "$t/config") -eq 2 ]]'
+sed -i '/	tile-a	/s/	arn:/	arn:x/' "$db"
+awsp sync tile-b >/dev/null 2>&1
+check "sync <tile> keeps the other tiles' rows" '[[ $(grep -c "	arn:xaws:" "$db") -eq 3 ]]'
+awsp sync >/dev/null 2>&1
 
-# shellcheck source=../awsp.sh
-source "$repo/awsp.sh"
 # Every row has text starting exactly where each header column starts.
 list_aligned() {
-  awsp -l | sed 's/[●○]/o/g' | awk '
+  awsp list | sed 's/[●○]/o/g' | awk '
     NR == 1 {n = split("SESSION ACCOUNT ID TILE", h, " "); for (i = 1; i <= n; i++) c[i] = index($0, h[i]); next}
     {for (i = 1; i <= n; i++) if (substr($0, c[i] - 1, 2) !~ /^ [^ ]/) bad = 1}
     END {exit bad}'
 }
-check "list with no sessions yet" '[[ $(awsp -l | wc -l) -eq 5 ]] && awsp -l | head -1 | grep -q "^PROFILE"'
+check "list with no sessions yet" '[[ $(awsp list | wc -l) -eq 5 && $(awsp -l | wc -l) -eq 5 ]] && awsp list | head -1 | grep -q "^PROFILE"'
+check "awsp help lists the subcommands" '[[ $(awsp help) == *"awsp setup"*"awsp sync"*"awsp eks"* ]]'
+
+COMP_WORDS=(awsp s) COMP_CWORD=1; _awsp_complete
+check "completes subcommands" '[[ ${COMPREPLY[*]} == "setup sync" ]]'
+COMP_WORDS=(awsp sync "") COMP_CWORD=2; _awsp_complete
+check "completes tiles after sync" '[[ ${COMPREPLY[*]} == "tile-a tile-b" ]]'
+
+check "awsp eks without a profile fails" '! awsp eks c1 2>/dev/null && [[ ! -e $EKS_LOG ]]'
 awsp acme-prod-web-admin >/dev/null 2>&1
 check "login and AWS_PROFILE" '[[ $AWS_PROFILE == acme-prod-web-admin ]] && [[ $(wc -l <"$LOGINS") -eq 1 ]]'
 awsp acme-prod-web-admin >/dev/null 2>&1
@@ -89,6 +113,10 @@ check "duration fallback, maximum remembered" 'grep -q "^acme-dev-web-readonly	2
 awsp 333333333333-admin >/dev/null 2>&1
 check "no saved password: retries with prompt" 'grep -q "^tile-b 333333333333-admin dur=43200 skip=$" "$LOGINS"'
 
+awsp eks c1 >/dev/null 2>&1
+check "awsp eks: context bound to the profile" \
+  'grep -q -- "--name c1 --region us-west-2 --profile 333333333333-admin --alias 333333333333-admin/c1" "$EKS_LOG"'
+
 awsp off
 check "awsp off" '[[ -z ${AWS_PROFILE:-} ]]'
 
@@ -97,7 +125,7 @@ printf '[team-a]\nurl = x\nusername = me@example.com\nmfa = PUSH\naws_session_du
 # Bad URL, valid URL, existing name, invalid name, valid name, 4 defaults, no more tiles, no sync.
 printf '%s\n' not-a-url 'https://example.okta.com/home/amazon_aws/0oaABC/272?fromHome=true' \
   team-a 'team b' team-b '' '' '' '' n n |
-  SAML2AWS_CONFIGFILE=$cfg "$repo/bin/awsp-setup" >/dev/null 2>&1
+  SAML2AWS_CONFIGFILE=$cfg awsp setup >/dev/null 2>&1
 check "setup appends a tile" 'grep -qx "\[team-b\]" "$cfg" && [[ $(grep -c "^\[" "$cfg") -eq 2 ]]'
 check "setup strips the URL query" 'grep -q "^url  *= https://example.okta.com/home/amazon_aws/0oaABC/272$" "$cfg"'
 check "setup defaults from existing tiles" 'grep -q "^username  *= me@example.com$" "$cfg" && grep -q "^mfa  *= PUSH$" "$cfg" && grep -q "^aws_session_duration  *= 14400$" "$cfg"'
@@ -105,8 +133,8 @@ check "setup enables saml_cache per tile" 'grep -q "^saml_cache_file  *= .*/saml
 check "setup backs up the config" '[[ -f $cfg.bak.awsp ]] && ! grep -q team-b "$cfg.bak.awsp"'
 
 printf '%s\n' 'https://example.okta.com/home/amazon_aws/0oaDEF/272' team-c u@example.com '' 12 eu-west-1 n y |
-  SAML2AWS_CONFIGFILE=$cfg AWSP_DIR=$t/awsp2 "$repo/bin/awsp-setup" >/dev/null 2>&1
-check "setup runs awsp-sync for the new tile" '[[ $(cut -f2 "$t/awsp2/profiles.tsv" | sort -u) == team-c ]]'
+  SAML2AWS_CONFIGFILE=$cfg AWSP_DIR=$t/awsp2 awsp setup >/dev/null 2>&1
+check "setup runs awsp sync for the new tile" '[[ $(cut -f2 "$t/awsp2/profiles.tsv" | sort -u) == team-c ]]'
 
 echo
 ((fails == 0)) && echo "all ok" || { echo "$fails failed"; exit 1; }
