@@ -1,6 +1,7 @@
 name: conventional commits
 
-# release-please builds the changelog and the next version from these messages.
+# The release workflow computes the next version and the changelog from these
+# messages, so they have to follow Conventional Commits.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -16,13 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # With no commitlint config in the repo, it uses @commitlint/config-conventional.
-      - uses: wagoid/commitlint-github-action@v6
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1
 
   # A squash merge uses the PR title as the commit message.
   title:
     name: PR title
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@v6
+      - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
