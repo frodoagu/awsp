@@ -71,6 +71,7 @@ _awsp_list() {
   } | column -t -s $'\t'
 }
 
+# True if profile $1 has a session with more than 5 minutes left.
 _awsp_valid() {
   local exp
   exp=$(_awsp_expiries | awk -F'\t' -v p="$1" '$1 == p {print $2}')
@@ -83,6 +84,7 @@ _awsp_run_login() {
   "$_AWSP_ROOT/libexec/awsp-tty" "$log" saml2aws login "$@"
 }
 
+# Remember that profile $1 allows sessions of at most $2 seconds.
 _awsp_set_duration() {
   local tmp
   tmp=$(mktemp)
@@ -91,6 +93,9 @@ _awsp_set_duration() {
   mv "$tmp" "$AWSP_DURATIONS"
 }
 
+# saml2aws login for profile $1 (tile $2, role ARN $3). Retries with a password
+# prompt when the tile has none saved, and for 1h when the role rejects the
+# requested duration, remembering the role's maximum for next time.
 _awsp_login() {
   local profile=$1 tile=$2 arn=$3 log rc dur max skip=--skip-prompt
   local args=(-a "$tile" --role "$arn" --profile "$profile" --force --cache-saml)
@@ -124,6 +129,8 @@ _awsp_help() {
   awk 'NR > 2 && /^#/ {sub(/^# ?/, ""); print; next} NR > 2 {exit}' "$_AWSP_SRC"
 }
 
+# Run a subcommand, or pick a profile (exact name, role ARN or fzf menu), log in
+# if its session expired, and export AWS_PROFILE. See the header for usage.
 awsp() {
   # Subcommands that don't need the inventory.
   case ${1:-} in
@@ -167,6 +174,8 @@ awsp() {
   echo "AWS_PROFILE=$profile  ($label / $acct, role ${arn##*/})" >&2
 }
 
+# awsp eks [cluster…]: kubectl contexts named <profile>/<cluster>, pinned to the
+# current profile. With no clusters, choose them in fzf.
 _awsp_eks() {
   if [[ -z ${AWS_PROFILE:-} ]]; then
     echo "awsp eks: pick a profile with awsp first" >&2
@@ -201,6 +210,7 @@ _awsp_candidates() {
 }
 
 if [[ -n ${ZSH_VERSION:-} ]]; then
+  # zsh completion, registered with compdef below.
   _awsp_zsh_complete() {
     local -a cands
     local c
@@ -210,6 +220,7 @@ if [[ -n ${ZSH_VERSION:-} ]]; then
   # compdef comes from compinit, so awsp has to be sourced after it (the end of ~/.zshrc is fine).
   if command -v compdef >/dev/null 2>&1; then compdef _awsp_zsh_complete awsp; fi
 else
+  # bash completion, registered with complete -F below.
   _awsp_complete() {
     local cur=${COMP_WORDS[COMP_CWORD]} c
     COMPREPLY=()

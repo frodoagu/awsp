@@ -28,6 +28,7 @@ confirm() {
 # Last value of a key in the existing config, used as the default for new tiles.
 last() { awk -F' *= *' -v k="$1" '$1 == k {v = $2} END {print v}' "$SAML_CFG" 2>/dev/null || true; }
 
+# Tile names already in the config.
 tiles() { sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "$SAML_CFG" 2>/dev/null || true; }
 
 def_user=$(last username)
