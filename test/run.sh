@@ -152,7 +152,8 @@ if command -v zsh >/dev/null 2>&1; then
   cat >"$t/test.zsh" <<EOF
 source "$repo/awsp.sh"
 print "list=\$(awsp list | wc -l | tr -d ' ')"
-awsp acme-dev-web-readonly 2>/dev/null
+# stdout too: with no TTY on stdin, BSD script(1) echoes a ^D there, with no newline.
+awsp acme-dev-web-readonly >/dev/null 2>&1
 print "profile=\$AWS_PROFILE"
 awsp off
 print "off=\${AWS_PROFILE:-unset}"
@@ -164,6 +165,7 @@ source "$repo/awsp.sh"
 print "compdef=\${_comps[awsp]}"
 EOF
   zsh -f "$t/test.zsh" >"$t/zsh.out" 2>"$t/zsh.err" </dev/null
+  fails_before_zsh=$fails
   check "zsh: awsp list" 'grep -qx "list=5" "$t/zsh.out"'
   check "zsh: login with a remembered duration, exports AWS_PROFILE" \
     'grep -qx "profile=acme-dev-web-readonly" "$t/zsh.out" && grep -qx "tile-a acme-dev-web-readonly dur=28800 skip=1" "$LOGINS"'
@@ -172,7 +174,10 @@ EOF
   check "zsh: completion candidates" \
     'grep -q "^cands=setup sync eks list off help .*acme-prod-web-admin" "$t/zsh.out" && grep -qx "tiles=tile-a tile-b " "$t/zsh.out"'
   check "zsh: completion registered with compdef" 'grep -qx "compdef=_awsp_zsh_complete" "$t/zsh.out"'
-  check "zsh: nothing on stderr" '[[ ! -s $t/zsh.err ]] || { cat "$t/zsh.err"; false; }'
+  check "zsh: nothing on stderr" '[[ ! -s $t/zsh.err ]]'
+  if ((fails > fails_before_zsh)); then
+    for f in zsh.out zsh.err logins; do echo "--- $f"; cat -v "$t/$f"; done
+  fi
 else
   echo "skip zsh tests (zsh not installed)"
 fi
