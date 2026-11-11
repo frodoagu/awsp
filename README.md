@@ -9,6 +9,7 @@ $ awsp
   acme-prod-data-sysadmin    ○        acme-prod-data    444444444444  tile-a
 ```
 
+- **Linux and macOS, bash or zsh**: works with the bash 3.2 that ships with macOS, and needs no GNU tools.
 - **One command**: everything is an `awsp` subcommand (`awsp setup`, `awsp sync`, `awsp eks`…), and `<Tab>` completes subcommands, profiles and tiles.
 - **Guided setup**: `awsp setup` asks for your Okta tiles and writes `~/.saml2aws` for you.
 - **One menu (fzf) with all your accounts and roles**, across every tile. ● = active session and how long it has left.
@@ -20,7 +21,13 @@ $ awsp
 
 ## Quickstart
 
-You need bash 4+, [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2, [fzf](https://github.com/junegunn/fzf), `script` (util-linux) and GNU `date`. Tested on Linux.
+Works on Linux and macOS, in bash (3.2 or later) or zsh. You need [saml2aws](https://github.com/Versent/saml2aws), AWS CLI v2 and [fzf](https://github.com/junegunn/fzf):
+
+```bash
+brew install saml2aws awscli fzf          # macOS
+```
+
+On Linux, install them with your package manager or from their releases. awsp also uses `script`, which comes with both systems (util-linux on Linux).
 
 ### 1. Install
 
@@ -29,7 +36,15 @@ git clone https://github.com/frodoagu/awsp.git
 cd awsp && ./install.sh
 ```
 
-The installer warns about any missing dependency and adds one line to `~/.bashrc` that loads `awsp`. It is a shell function, not a script on your `PATH`, because it has to export `AWS_PROFILE` into your current shell.
+The installer warns about any missing dependency and adds one line that loads `awsp` to your shell's startup file:
+
+| Your shell | File |
+| --- | --- |
+| zsh (the macOS default) | `~/.zshrc`, or `$ZDOTDIR/.zshrc` if you set `ZDOTDIR` |
+| bash on Linux | `~/.bashrc` |
+| bash on macOS | `~/.bashrc`, plus the login file, since Terminal opens login shells: the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists, or a new `~/.bash_profile` |
+
+Set `AWSP_RC=<file>` to use another one. `awsp` is a shell function, not a script on your `PATH`, because it has to export `AWS_PROFILE` into your current shell.
 
 ### 2. Add your Okta tiles
 
@@ -110,7 +125,9 @@ A session counts as active while it has more than 5 minutes left; below that, `a
 | `awsp <Tab>` | subcommands and profile names |
 | `awsp sync <Tab>` | tile names from `~/.saml2aws` |
 
-Completion reads the inventory on every `<Tab>`, so new profiles show up right after `awsp sync`, without opening a new terminal.
+It works in bash and zsh. Completion reads the inventory on every `<Tab>`, so new profiles show up right after `awsp sync`, without opening a new terminal.
+
+In zsh, awsp has to be loaded after `compinit`. Oh My Zsh and most setups run it early in `~/.zshrc`, and `install.sh` appends its line at the end, so this usually just works.
 
 ### Aliases
 
@@ -170,6 +187,7 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 | `SAML2AWS_CONFIGFILE` | `~/.saml2aws` | tile definitions |
 | `AWS_CONFIG_FILE` | `~/.aws/config` | managed block |
 | `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | session expiry |
+| `AWSP_RC` | see [Install](#1-install) | shell startup file that `install.sh` adds the awsp line to |
 | `BINDIR` | `~/.local/bin` | where `install.sh` looks for `awsp-setup` / `awsp-sync` links from older versions, to remove them |
 
 ## Troubleshooting
@@ -177,7 +195,8 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 | Symptom | Fix |
 | --- | --- |
 | `awsp: no inventory yet` | Run `awsp setup`, or `awsp sync` if `~/.saml2aws` already has your tiles. |
-| `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp is bash-only. |
+| `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp runs in bash and zsh; on macOS with bash, check that your login file (`~/.bash_profile`, `~/.bash_login` or `~/.profile`) has the awsp line. |
+| No tab completion in zsh | Move the awsp line in `~/.zshrc` below `compinit` (or below the Oh My Zsh line). |
 | `awsp-setup` / `awsp-sync` / `awsp-eks`: command not found | They are subcommands now: `awsp setup`, `awsp sync`, `awsp eks`. See [Updating](#updating-and-uninstalling). |
 | `list-roles failed for <tile>` | Check that tile's `url` and `username` in `~/.saml2aws`. An empty Enter at the password prompt also fails. |
 | `unknown role arn:…` | The role isn't in the inventory; run `awsp sync` again. |
@@ -190,13 +209,21 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 
 Coming from a version with separate `awsp-setup`, `awsp-sync` and `awsp-eks` commands? They are `awsp setup`, `awsp sync` and `awsp eks` now. Run `./install.sh` again (it removes the old links in `~/.local/bin`), open a new terminal, and update any aliases that call the old names.
 
-To uninstall, remove `~/.config/awsp/awsp.sh` and the awsp line in `~/.bashrc`. Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
+To uninstall, remove `~/.config/awsp/awsp.sh` and the awsp lines in your shell startup files (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`). Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
 
 ## Tests
 
 ```bash
 ./test/run.sh    # uses saml2aws and aws stubs; never touches Okta, AWS or your ~/.aws
 ```
+
+The tests run with whichever bash runs them (`/bin/bash test/run.sh` on macOS tests bash 3.2), plus zsh if it is installed. CI runs them on Linux and on macOS.
+
+## Contributing and releases
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat: …`, `fix(install): …`, `docs: …`). Pull requests check every commit message, and the PR title too, since a squash merge uses it as the commit message.
+
+Releases are automatic, with [release-please](https://github.com/googleapis/release-please-action). Each merge to `main` opens or updates a release PR that bumps `version.txt` and adds the new commits to `CHANGELOG.md`. While the version is below 1.0.0, `feat` commits and breaking changes bump the minor version and `fix` bumps the patch. Merging the release PR tags `vX.Y.Z` and publishes the GitHub release.
 
 ## License
 

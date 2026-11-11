@@ -1,4 +1,4 @@
-# awsp: AWS profile picker on top of saml2aws. Sourced from ~/.bashrc.
+# awsp: AWS profile picker on top of saml2aws. Sourced from ~/.bashrc or ~/.zshrc (bash 3.2+ or zsh).
 #
 #   awsp                 fzf menu with every profile (● = active session)
 #   awsp <text>          exact profile, or pre-filtered fzf (auto-picks a single match)
@@ -10,22 +10,50 @@
 #   awsp off             clear AWS_PROFILE and any credentials in environment variables
 #   awsp help            show this help (also -h)
 
-# Checkout behind this (usually symlinked) file; helper scripts live in its libexec/.
-_AWSP_ROOT=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+# This file with symlinks resolved (~/.config/awsp/awsp.sh points into the repo);
+# the helper scripts live in the repo's libexec/. No `readlink -f`: older macOS lacks it.
+if [[ -n ${ZSH_VERSION:-} ]]; then
+  eval '_AWSP_SRC=${(%):-%x}'
+else
+  _AWSP_SRC=${BASH_SOURCE[0]}
+fi
+[[ $_AWSP_SRC == /* ]] || _AWSP_SRC=$PWD/$_AWSP_SRC
+while [[ -L $_AWSP_SRC ]]; do
+  _awsp_link=$(readlink "$_AWSP_SRC")
+  [[ $_awsp_link == /* ]] || _awsp_link=${_AWSP_SRC%/*}/$_awsp_link
+  _AWSP_SRC=$_awsp_link
+done
+unset _awsp_link
+_AWSP_ROOT=${_AWSP_SRC%/*}
 AWSP_DIR=${AWSP_DIR:-$HOME/.config/awsp}
 AWSP_DB=$AWSP_DIR/profiles.tsv
 # "profile<TAB>seconds" for roles whose maximum is below the tile's aws_session_duration.
 AWSP_DURATIONS=$AWSP_DIR/durations.tsv
 
-# "profile<TAB>expiry epoch" from saml2aws' x_security_token_expires.
+# "profile<TAB>expiry epoch" from saml2aws' x_security_token_expires, an RFC 3339
+# timestamp such as 2026-11-11T12:35:35-03:00 or 2026-11-11T15:35:35Z.
+# Converted in awk because `date -d` is GNU-only.
 _awsp_expiries() {
-  local f=${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials} p exp
+  local f=${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}
   [[ -r $f ]] || return 0
-  awk -F' *= *' '/^\[/ {p = substr($0, 2, length($0) - 2); next}
-    $1 == "x_security_token_expires" {print p "\t" $2}' "$f" |
-    while IFS=$'\t' read -r p exp; do
-      printf '%s\t%s\n' "$p" "$(date -d "$exp" +%s 2>/dev/null || echo 0)"
-    done
+  awk -F' *= *' '
+    function epoch(s,   y, m, d, z, off, era, yoe, doy, days) {
+      if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9][Tt ][0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) return 0
+      y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0; d = substr(s, 9, 2) + 0
+      off = 0
+      if (match(s, /[+-][0-9][0-9]:?[0-9][0-9]$/)) {
+        z = substr(s, RSTART + 1); gsub(/:/, "", z)
+        off = (substr(z, 1, 2) * 3600 + substr(z, 3, 2) * 60) * (substr(s, RSTART, 1) == "-" ? -1 : 1)
+      }
+      # Days since 1970-01-01, using the days_from_civil algorithm by Howard Hinnant.
+      if (m <= 2) y--
+      era = int(y / 400); yoe = y - era * 400
+      doy = int((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + d - 1
+      days = era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy - 719468
+      return days * 86400 + substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2) - off
+    }
+    /^\[/ {p = substr($0, 2, length($0) - 2); next}
+    $1 == "x_security_token_expires" {v = $2; sub(/[ \t\r]+$/, "", v); print p "\t" epoch(v)}' "$f"
 }
 
 # Header + one row per profile, aligned by `column` (which counts ●/○ as one column, unlike awk).
@@ -43,18 +71,20 @@ _awsp_list() {
   } | column -t -s $'\t'
 }
 
+# True if profile $1 has a session with more than 5 minutes left.
 _awsp_valid() {
   local exp
   exp=$(_awsp_expiries | awk -F'\t' -v p="$1" '$1 == p {print $2}')
   [[ -n $exp ]] && ((exp > $(date +%s) + 300))
 }
 
-# Run saml2aws login inside `script` so it gets a TTY (prompts) while we can still read its errors.
+# saml2aws login with a TTY (so it can prompt), saving its output to $1 so we can read its errors.
 _awsp_run_login() {
   local log=$1; shift
-  script -qec "$(printf '%q ' saml2aws login "$@")" "$log"
+  "$_AWSP_ROOT/libexec/awsp-tty" "$log" saml2aws login "$@"
 }
 
+# Remember that profile $1 allows sessions of at most $2 seconds.
 _awsp_set_duration() {
   local tmp
   tmp=$(mktemp)
@@ -63,22 +93,25 @@ _awsp_set_duration() {
   mv "$tmp" "$AWSP_DURATIONS"
 }
 
+# saml2aws login for profile $1 (tile $2, role ARN $3). Retries with a password
+# prompt when the tile has none saved, and for 1h when the role rejects the
+# requested duration, remembering the role's maximum for next time.
 _awsp_login() {
-  local profile=$1 tile=$2 arn=$3 log rc dur max
+  local profile=$1 tile=$2 arn=$3 log rc dur max skip=--skip-prompt
   local args=(-a "$tile" --role "$arn" --profile "$profile" --force --cache-saml)
-  local prompt=--skip-prompt
   dur=$(awk -F'\t' -v p="$profile" '$1 == p {print $2}' "$AWSP_DURATIONS" 2>/dev/null)
   log=$(mktemp)
 
-  _awsp_run_login "$log" "${args[@]}" $prompt ${dur:+--session-duration "$dur"}; rc=$?
-  if ((rc)) && grep -qi 'empty password\|authenticat' "$log"; then
+  # $skip and ${dur:+…} are unquoted on purpose: when empty they vanish, in bash and zsh alike.
+  _awsp_run_login "$log" "${args[@]}" $skip ${dur:+--session-duration} ${dur:+"$dur"}; rc=$?
+  if ((rc)) && grep -qiE 'empty password|authenticat' "$log"; then
     echo "awsp: no saved password for tile $tile; type it (it gets stored in the keyring)" >&2
-    prompt=
-    _awsp_run_login "$log" "${args[@]}" ${dur:+--session-duration "$dur"}; rc=$?
+    skip=
+    _awsp_run_login "$log" "${args[@]}" ${dur:+--session-duration} ${dur:+"$dur"}; rc=$?
   fi
   if ((rc)) && grep -q 'DurationSeconds' "$log"; then
     echo "awsp: the role rejects that duration; logging in for 1h and looking up its maximum" >&2
-    _awsp_run_login "$log" "${args[@]}" $prompt --session-duration 3600; rc=$?
+    _awsp_run_login "$log" "${args[@]}" $skip --session-duration 3600; rc=$?
     if ((rc == 0)); then
       max=$(aws iam get-role --profile "$profile" --role-name "${arn##*/}" \
         --query Role.MaxSessionDuration --output text 2>/dev/null)
@@ -93,9 +126,11 @@ _awsp_login() {
 
 # Usage lines from the header comment of this file.
 _awsp_help() {
-  awk 'NR > 2 && /^#/ {sub(/^# ?/, ""); print; next} NR > 2 {exit}' "${BASH_SOURCE[0]}"
+  awk 'NR > 2 && /^#/ {sub(/^# ?/, ""); print; next} NR > 2 {exit}' "$_AWSP_SRC"
 }
 
+# Run a subcommand, or pick a profile (exact name, role ARN or fzf menu), log in
+# if its session expired, and export AWS_PROFILE. See the header for usage.
 awsp() {
   # Subcommands that don't need the inventory.
   case ${1:-} in
@@ -126,8 +161,8 @@ awsp() {
     [[ -n $profile ]] || return 1
   fi
 
-  local tile arn acct label
-  IFS=$'\t' read -r _ tile arn acct label < <(awk -F'\t' -v p="$profile" '$1 == p' "$AWSP_DB")
+  local name tile arn acct label
+  IFS=$'\t' read -r name tile arn acct label < <(awk -F'\t' -v p="$profile" '$1 == p' "$AWSP_DB")
 
   if ! _awsp_valid "$profile"; then
     echo "awsp: logging in to $profile ($tile)…" >&2
@@ -139,6 +174,8 @@ awsp() {
   echo "AWS_PROFILE=$profile  ($label / $acct, role ${arn##*/})" >&2
 }
 
+# awsp eks [cluster…]: kubectl contexts named <profile>/<cluster>, pinned to the
+# current profile. With no clusters, choose them in fzf.
 _awsp_eks() {
   if [[ -z ${AWS_PROFILE:-} ]]; then
     echo "awsp eks: pick a profile with awsp first" >&2
@@ -147,9 +184,11 @@ _awsp_eks() {
   local region=${AWS_REGION:-$(aws configure get region --profile "$AWS_PROFILE")} c
   local clusters=("$@")
   if ((${#clusters[@]} == 0)); then
-    mapfile -t clusters < <(aws eks list-clusters --region "${region:-us-east-1}" --query 'clusters[]' --output text |
-      tr '\t' '\n' | fzf --multi --height 40% --reverse --select-1 --exit-0 --prompt 'cluster> ')
+    while IFS= read -r c; do clusters+=("$c"); done < <(
+      aws eks list-clusters --region "${region:-us-east-1}" --query 'clusters[]' --output text |
+        tr '\t' '\n' | fzf --multi --height 40% --reverse --select-1 --exit-0 --prompt 'cluster> ')
   fi
+  ((${#clusters[@]})) || return 1
   for c in "${clusters[@]}"; do
     # --profile makes the kubeconfig pin AWS_PROFILE in the `aws eks get-token` exec.
     aws eks update-kubeconfig --name "$c" --region "${region:-us-east-1}" \
@@ -157,17 +196,36 @@ _awsp_eks() {
   done
 }
 
-# Subcommands and profile names; tile names after `awsp sync`.
-_awsp_complete() {
-  local cur=${COMP_WORDS[COMP_CWORD]} words
-  if ((COMP_CWORD == 1)); then
-    words="setup sync eks list off help $(cut -f1 "$AWSP_DB" 2>/dev/null)"
-  elif [[ ${COMP_WORDS[1]} == sync ]]; then
-    words=$(sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "${SAML2AWS_CONFIGFILE:-$HOME/.saml2aws}" 2>/dev/null |
-      grep -vx default)
-  else
-    return
+# Completion candidates, one per line. $1: position of the word being completed
+# (1 = first argument); $2: the first argument.
+_awsp_candidates() {
+  if (($1 == 1)); then
+    printf '%s\n' setup sync eks list off help
+    cut -f1 "$AWSP_DB" 2>/dev/null
+  elif [[ $2 == sync ]]; then
+    sed -n 's/^\[\(.*\)\][[:space:]]*$/\1/p' "${SAML2AWS_CONFIGFILE:-$HOME/.saml2aws}" 2>/dev/null |
+      grep -vx default
   fi
-  mapfile -t COMPREPLY < <(compgen -W "$words" -- "$cur")
+  return 0
 }
-complete -F _awsp_complete awsp
+
+if [[ -n ${ZSH_VERSION:-} ]]; then
+  # zsh completion, registered with compdef below.
+  _awsp_zsh_complete() {
+    local -a cands
+    local c
+    while IFS= read -r c; do cands+=("$c"); done < <(_awsp_candidates "$((CURRENT - 1))" "${words[2]:-}")
+    compadd -a cands
+  }
+  # compdef comes from compinit, so awsp has to be sourced after it (the end of ~/.zshrc is fine).
+  if command -v compdef >/dev/null 2>&1; then compdef _awsp_zsh_complete awsp; fi
+else
+  # bash completion, registered with complete -F below.
+  _awsp_complete() {
+    local cur=${COMP_WORDS[COMP_CWORD]} c
+    COMPREPLY=()
+    while IFS= read -r c; do COMPREPLY+=("$c"); done < <(
+      compgen -W "$(_awsp_candidates "$COMP_CWORD" "${COMP_WORDS[1]:-}")" -- "$cur")
+  }
+  complete -F _awsp_complete awsp
+fi

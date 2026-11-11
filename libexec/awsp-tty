@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# awsp-tty LOG CMD [ARG…]: run CMD with a TTY, so it can prompt, while saving
+# its output to LOG; exits with CMD's status. Hides the differences between
+# util-linux script(1) on Linux and BSD script(1) on macOS.
+log=$1
+shift
+if script --version 2>/dev/null | grep -q util-linux; then
+  exec script -qec "$(printf '%q ' "$@")" "$log"
+fi
+exec script -q "$log" "$@"

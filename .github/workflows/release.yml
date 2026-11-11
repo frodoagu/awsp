@@ -1,0 +1,20 @@
+name: release
+
+# On every push to main, release-please reads the Conventional Commits since the
+# last release and opens or updates a release PR (CHANGELOG.md and version.txt).
+# Merging that PR tags vX.Y.Z and publishes the GitHub release.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Settings in release-please-config.json and .release-please-manifest.json.
+      - uses: googleapis/release-please-action@v5
