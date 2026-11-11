@@ -223,7 +223,7 @@ The tests run with whichever bash runs them (`/bin/bash test/run.sh` on macOS te
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat: …`, `fix(install): …`, `docs: …`). Pull requests check every commit message, and the PR title too, since a squash merge uses it as the commit message.
 
-Releases are automatic, with [release-please](https://github.com/googleapis/release-please-action). Each merge to `main` opens or updates a release PR that bumps `version.txt` and adds the new commits to `CHANGELOG.md`. While the version is below 1.0.0, `feat` commits and breaking changes bump the minor version and `fix` bumps the patch. Merging the release PR tags `vX.Y.Z` and publishes the GitHub release.
+Releases are automatic. On every push to `main`, the release workflow reads the Conventional Commits since the last tag. `feat` bumps the minor version, `fix` and `perf` the patch, and a breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) the major. It then tags `vX.Y.Z` and publishes a GitHub release whose notes list those commits. Other types (`docs`, `ci`, `test`, `chore`…) don't make a release.
 
 ## License
 
