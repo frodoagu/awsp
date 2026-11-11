@@ -182,19 +182,48 @@ else
   echo "skip zsh tests (zsh not installed)"
 fi
 
-# install.sh in a scratch HOME, coming from a version that linked awsp-sync into ~/.local/bin.
-h=$t/home
+# install.sh in scratch HOMEs, with a fake uname to cover both systems from either.
+for os in Linux Darwin; do
+  mkdir -p "$t/os/$os"
+  printf '#!/bin/sh\necho %s\n' "$os" >"$t/os/$os/uname"
+  chmod +x "$t/os/$os/uname"
+done
+# install_as HOME OS SHELL [VAR=value…]
+install_as() {
+  local home=$1 os=$2 shell=$3
+  shift 3
+  mkdir -p "$home"
+  env HOME="$home" SHELL="$shell" PATH="$t/os/$os:$PATH" AWSP_DIR= BINDIR= AWSP_RC= ZDOTDIR= "$@" \
+    "$repo/install.sh" >/dev/null 2>&1
+}
+
+h=$t/home1
 mkdir -p "$h/.local/bin"
 ln -s /nonexistent/awsp-sync "$h/.local/bin/awsp-sync"
-install_as() { HOME=$h SHELL=$1 AWSP_DIR= BINDIR= AWSP_RC= "$repo/install.sh" >/dev/null 2>&1; }
-install_as /bin/zsh
-install_as /bin/zsh
+install_as "$h" Darwin /bin/zsh
+install_as "$h" Darwin /bin/zsh
 check "install: links awsp.sh and removes old links" '[[ -L $h/.config/awsp/awsp.sh && ! -L $h/.local/bin/awsp-sync ]]'
 check "install: zsh gets one line in ~/.zshrc" '[[ $(grep -c awsp.sh "$h/.zshrc") -eq 1 ]]'
-bash_rc=.bashrc
-[[ $(uname -s) == Darwin ]] && bash_rc=.bash_profile
-install_as /bin/bash
-check "install: bash gets ~/$bash_rc" 'grep -q awsp.sh "$h/$bash_rc"'
+
+install_as "$t/home2" Linux /bin/zsh ZDOTDIR="$t/home2/zdot"
+check "install: zsh honors ZDOTDIR" 'grep -q awsp.sh "$t/home2/zdot/.zshrc" && [[ ! -e $t/home2/.zshrc ]]'
+
+install_as "$t/home3" Linux /bin/bash
+check "install: bash on Linux gets ~/.bashrc" 'grep -q awsp.sh "$t/home3/.bashrc"'
+
+install_as "$t/home4" Darwin /bin/bash
+check "install: bash on macOS gets ~/.bash_profile and ~/.bashrc" \
+  'grep -q awsp.sh "$t/home4/.bash_profile" && grep -q awsp.sh "$t/home4/.bashrc"'
+
+h=$t/home5
+mkdir -p "$h"
+echo 'export FROM_PROFILE=1' >"$h/.profile"
+install_as "$h" Darwin /bin/bash
+check "install: bash on macOS keeps an existing ~/.profile in use" \
+  '[[ ! -e $h/.bash_profile ]] && grep -q "BASH_VERSION.*awsp.sh" "$h/.profile" && grep -q awsp.sh "$h/.bashrc"'
+check "install: the ~/.profile line is harmless in sh" '[[ -z $(HOME=$h sh -c ". ~/.profile" 2>&1) ]]'
+check "install: bash login shells load awsp from ~/.profile" \
+  '[[ $(HOME=$h "$BASH" -lc "type -t awsp; echo \$FROM_PROFILE" 2>/dev/null) == function*1 ]]'
 
 echo
 ((fails == 0)) && echo "all ok" || { echo "$fails failed"; exit 1; }

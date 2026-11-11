@@ -40,9 +40,9 @@ The installer warns about any missing dependency and adds one line that loads `a
 
 | Your shell | File |
 | --- | --- |
-| zsh (the macOS default) | `~/.zshrc` |
+| zsh (the macOS default) | `~/.zshrc`, or `$ZDOTDIR/.zshrc` if you set `ZDOTDIR` |
 | bash on Linux | `~/.bashrc` |
-| bash on macOS | `~/.bash_profile`, since Terminal opens login shells |
+| bash on macOS | `~/.bashrc`, plus the login file, since Terminal opens login shells: the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists, or a new `~/.bash_profile` |
 
 Set `AWSP_RC=<file>` to use another one. `awsp` is a shell function, not a script on your `PATH`, because it has to export `AWS_PROFILE` into your current shell.
 
@@ -195,7 +195,7 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 | Symptom | Fix |
 | --- | --- |
 | `awsp: no inventory yet` | Run `awsp setup`, or `awsp sync` if `~/.saml2aws` already has your tiles. |
-| `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp runs in bash and zsh; on macOS with bash, check that `~/.bash_profile` has the awsp line. |
+| `awsp: command not found` | Open a new terminal, or `. ~/.config/awsp/awsp.sh`. awsp runs in bash and zsh; on macOS with bash, check that your login file (`~/.bash_profile`, `~/.bash_login` or `~/.profile`) has the awsp line. |
 | No tab completion in zsh | Move the awsp line in `~/.zshrc` below `compinit` (or below the Oh My Zsh line). |
 | `awsp-setup` / `awsp-sync` / `awsp-eks`: command not found | They are subcommands now: `awsp setup`, `awsp sync`, `awsp eks`. See [Updating](#updating-and-uninstalling). |
 | `list-roles failed for <tile>` | Check that tile's `url` and `username` in `~/.saml2aws`. An empty Enter at the password prompt also fails. |
@@ -209,7 +209,7 @@ The requested duration otherwise comes from `aws_session_duration` in the tile's
 
 Coming from a version with separate `awsp-setup`, `awsp-sync` and `awsp-eks` commands? They are `awsp setup`, `awsp sync` and `awsp eks` now. Run `./install.sh` again (it removes the old links in `~/.local/bin`), open a new terminal, and update any aliases that call the old names.
 
-To uninstall, remove `~/.config/awsp/awsp.sh` and the awsp line in your shell startup file (`~/.zshrc`, `~/.bashrc` or `~/.bash_profile`). Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
+To uninstall, remove `~/.config/awsp/awsp.sh` and the awsp lines in your shell startup files (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`). Optionally also remove `~/.config/awsp` and the `# >>> awsp managed` block in `~/.aws/config`.
 
 ## Tests
 

@@ -21,20 +21,41 @@ for dep in saml2aws aws fzf script; do
   command -v "$dep" >/dev/null || echo "missing '$dep' in PATH" >&2
 done
 
-# The startup file of your login shell; override with AWSP_RC.
-# Terminal on macOS opens login shells, which read ~/.bash_profile rather than ~/.bashrc.
+# Startup files that load awsp; AWSP_RC overrides them.
+# - zsh: $ZDOTDIR/.zshrc (ZDOTDIR defaults to ~).
+# - bash on Linux: ~/.bashrc.
+# - bash on macOS: Terminal opens login shells, which read only the first of ~/.bash_profile,
+#   ~/.bash_login and ~/.profile that exists. Use that one, so that a new ~/.bash_profile
+#   doesn't hide an existing ~/.profile, plus ~/.bashrc for non-login shells.
 if [[ -n ${AWSP_RC:-} ]]; then
-  rc=$AWSP_RC
+  rcs=("$AWSP_RC")
 elif [[ ${SHELL:-} == */zsh ]]; then
-  rc=$HOME/.zshrc
+  rcs=("${ZDOTDIR:-$HOME}/.zshrc")
 elif [[ $(uname -s) == Darwin ]]; then
-  rc=$HOME/.bash_profile
+  login=$HOME/.bash_profile
+  for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if [[ -f $f ]]; then
+      login=$f
+      break
+    fi
+  done
+  rcs=("$login" "$HOME/.bashrc")
 else
-  rc=$HOME/.bashrc
+  rcs=("$HOME/.bashrc")
 fi
 line='[ -f ~/.config/awsp/awsp.sh ] && . ~/.config/awsp/awsp.sh'
-if ! grep -qF "$line" "$rc" 2>/dev/null; then
-  printf '\n# awsp: AWS profile picker on top of saml2aws\n%s\n' "$line" >>"$rc"
-  echo "added to $rc: $line"
-fi
+for rc in "${rcs[@]}"; do
+  # Also matches the guarded variant below.
+  if grep -qF '. ~/.config/awsp/awsp.sh' "$rc" 2>/dev/null; then
+    continue
+  fi
+  add=$line
+  if [[ ${rc##*/} == .profile ]]; then
+    # sh reads ~/.profile too and can't parse awsp.sh: load it only from bash, outside POSIX mode.
+    add='[ -n "${BASH_VERSION:-}" ] && ! shopt -oq posix && '$line
+  fi
+  mkdir -p "$(dirname "$rc")"
+  printf '\n# awsp: AWS profile picker on top of saml2aws\n%s\n' "$add" >>"$rc"
+  echo "added to $rc: $add"
+done
 echo "done: open a new terminal and run awsp setup (or awsp sync if ~/.saml2aws already has your tiles)"
