@@ -17,7 +17,7 @@ jobs:
             bash: /bin/bash
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Best effort: when the runner's apt mirrors are down, the tests skip zsh on Linux
       # (macOS still runs them, since zsh ships with it).
       - name: Install zsh

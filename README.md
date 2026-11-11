@@ -219,6 +219,12 @@ To uninstall, remove `~/.config/awsp/awsp.sh` and the awsp lines in your shell s
 
 The tests run with whichever bash runs them (`/bin/bash test/run.sh` on macOS tests bash 3.2), plus zsh if it is installed. CI runs them on Linux and on macOS.
 
+## Contributing and releases
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat: …`, `fix(install): …`, `docs: …`). Pull requests check every commit message, and the PR title too, since a squash merge uses it as the commit message.
+
+Releases are automatic, with [release-please](https://github.com/googleapis/release-please-action). Each merge to `main` opens or updates a release PR that bumps `version.txt` and adds the new commits to `CHANGELOG.md`. While the version is below 1.0.0, `feat` commits and breaking changes bump the minor version and `fix` bumps the patch. Merging the release PR tags `vX.Y.Z` and publishes the GitHub release.
+
 ## License
 
 MIT
